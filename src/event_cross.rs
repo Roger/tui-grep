@@ -1,5 +1,3 @@
-use std::io;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -7,8 +5,8 @@ use termion::event::Key;
 use termion::get_tty;
 use termion::input::TermRead;
 
+use crossbeam_channel::tick;
 use crossbeam_channel::Receiver;
-use crossbeam_channel::{after, tick};
 use crossbeam_channel::{select, unbounded};
 
 pub enum Event {
@@ -24,7 +22,7 @@ pub struct Events {
     rx_keys: Receiver<Event>,
     input_handle: thread::JoinHandle<()>,
     keyboard_handle: thread::JoinHandle<()>,
-    tick_handle: thread::JoinHandle<()>,
+    tick_handle: crossbeam_channel::Receiver<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,18 +93,7 @@ impl Events {
             })
         };
 
-        let tick_handle = {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                let tx = tx.clone();
-                loop {
-                    if let Err(_) = tx.send(Event::Tick) {
-                        return;
-                    }
-                    thread::sleep(config.tick_rate);
-                }
-            })
-        };
+        let tick_handle = tick(config.tick_rate);
 
         Events {
             rx,
@@ -118,14 +105,13 @@ impl Events {
     }
 
     pub fn next(&self) -> Event {
-        let ticker = tick(Duration::from_millis(50));
-        match  self.rx_keys.try_recv() {
+        match self.rx_keys.try_recv() {
             Ok(value) => return value,
             Err(_) => (),
         }
         select! {
             recv(self.rx) -> value => value.unwrap(),
-            recv(ticker) -> _ => Event::Tick,
+            recv(self.tick_handle) -> _ => Event::Tick,
         }
     }
 }
